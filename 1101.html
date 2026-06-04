@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 爱神之箭 - 专属立体照片特效</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            /* 初始的暗夜星空背景色 */
+            background: radial-gradient(circle at center, #1f111a 0%, #050204 100%);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        
+        /* 唯美花卉背景层（初始透明度为0） */
+        #romantic-bg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            /* 引用你本地的唯美背景图片 */
+            background-image: url('back.jpg'); 
+            background-size: cover;
+            background-position: center;
+            opacity: 0;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+            z-index: 1; /* 确保3D场景在背景之上 */
+        }
+
+        #hint {
+            position: absolute;
+            top: 30px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 14px;
+            pointer-events: none;
+            letter-spacing: 2px;
+            z-index: 10;
+        }
+
+        #ui-container {
+            position: absolute;
+            bottom: 60px;
+            width: 100%;
+            text-align: center;
+            z-index: 100;
+        }
+
+        button {
+            padding: 16px 45px;
+            font-size: 18px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            background: linear-gradient(135deg, #ff2a5f, #ff6b8b);
+            color: white;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 10px 30px rgba(255, 42, 95, 0.4);
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        button:hover {
+            transform: scale(1.05) translateY(-3px);
+            box-shadow: 0 15px 40px rgba(255, 42, 95, 0.7);
+        }
+        button:active {
+            transform: scale(0.95) translateY(0);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 用于渐变的唯美背景层 -->
+    <div id="romantic-bg"></div>
+
+    <div id="hint">照片弹出后，可自由拖拽旋转 🌟</div>
+    
+    <div id="ui-container">
+        <button id="shootBtn" onclick="prepareAndShoot()">召唤爱神之箭 🏹</button>
+    </div>
+
+    <!-- 引入 Three.js 和 GSAP -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <script>
+        // ==========================================
+        // 3D 场景与动画逻辑
+        // ==========================================
+        let scene, camera, renderer, controls;
+        let heartMesh, arrowGroup, bowGroup, stringLine, photoMesh;
+        let cupidGroup, leftWingPivot, rightWingPivot; // 新增丘比特相关变量
+        let heartbeatTween; 
+        let isAnimating = false;
+        
+        // 重新规划完美视角的物理坐标
+        const BOW_POS = new THREE.Vector3(-7, 1, 4);
+        const HEART_POS = new THREE.Vector3(3, 0, -2);
+        
+        const DIRECTION = new THREE.Vector3().subVectors(HEART_POS, BOW_POS).normalize(); 
+        const DRAW_POS = BOW_POS.clone().sub(DIRECTION.clone().multiplyScalar(3.5)); 
+        const HIT_POS = HEART_POS.clone().sub(DIRECTION.clone().multiplyScalar(5)); 
+
+        function init() {
+            scene = new THREE.Scene();
+            // 初始暗夜雾气
+            scene.fog = new THREE.FogExp2(0x050204, 0.015);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(-2, 4, 18);
+
+            // 必须开启 alpha: true 才能透出下方的 HTML 背景图
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.outputEncoding = THREE.sRGBEncoding;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.1; 
+            document.body.appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.target.copy(HEART_POS); 
+
+            setupLights();
+            createMeshes();
+
+            window.addEventListener('resize', onWindowResize);
+            animateLoop();
+        }
+
+        function setupLights() {
+            // 环境光
+            scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+            
+            const mainLight = new THREE.DirectionalLight(0xffffff, 1.0);
+            mainLight.position.set(-5, 10, 8);
+            mainLight.castShadow = true;
+            scene.add(mainLight);
+            
+            const purpleLight = new THREE.PointLight(0xa900ff, 1.5, 20);
+            purpleLight.position.set(-10, 5, 2);
+            scene.add(purpleLight);
+
+            // 正前方的微弱补光
+            const frontLight = new THREE.DirectionalLight(0xfff0f5, 0.4);
+            frontLight.position.set(3, 2, 10);
+            scene.add(frontLight);
+        }
+
+        function createMeshes() {
+            // --- 爱心 ---
+            const heartShape = new THREE.Shape();
+            heartShape.moveTo(0, 0.6);
+            heartShape.bezierCurveTo(0.9, 1.5, 2.4, 1.4, 2.4, 0.2);
+            heartShape.bezierCurveTo(2.4, -0.9, 1.1, -1.9, 0, -2.8);
+            heartShape.bezierCurveTo(-1.1, -1.9, -2.4, -0.9, -2.4, 0.2);
+            heartShape.bezierCurveTo(-2.4, 1.4, -0.9, 1.5, 0, 0.6);
+
+            const heartGeo = new THREE.ExtrudeGeometry(heartShape, { depth: 0.5, bevelEnabled: true, bevelSegments: 16, steps: 2, bevelSize: 0.25, bevelThickness: 0.25 });
+            heartGeo.center();
+            const heartMat = new THREE.MeshStandardMaterial({ color: 0xdd0825, roughness: 0.1, metalness: 0.15, clearcoat: 1.0 });
+            heartMesh = new THREE.Mesh(heartGeo, heartMat);
+            heartMesh.position.copy(HEART_POS);
+            scene.add(heartMesh);
+            startHeartbeat();
+
+            // --- 精灵金弓 ---
+            bowGroup = new THREE.Group();
+            const bowCurve = new THREE.CatmullRomCurve3([
+                new THREE.Vector3(0, 4.5, -1),      
+                new THREE.Vector3(0, 3.5, 0.5),     
+                new THREE.Vector3(0, 1.5, 1.2),     
+                new THREE.Vector3(0, 0, 1.5),       
+                new THREE.Vector3(0, -1.5, 1.2),    
+                new THREE.Vector3(0, -3.5, 0.5),    
+                new THREE.Vector3(0, -4.5, -1)      
+            ]);
+            const bowGeo = new THREE.TubeGeometry(bowCurve, 128, 0.12, 12, false);
+            const bowMat = new THREE.MeshStandardMaterial({ color: 0xffd700, metalness: 1.0, roughness: 0.15 });
+            const bowMesh = new THREE.Mesh(bowGeo, bowMat);
+            bowGroup.add(bowMesh);
+
+            const stringMat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.8 });
+            const stringPositions = new Float32Array([0, 4.5, -1, 0, 0, 0, 0, -4.5, -1]);
+            const stringGeo = new THREE.BufferGeometry();
+            stringGeo.setAttribute('position', new THREE.BufferAttribute(stringPositions, 3));
+            stringLine = new THREE.Line(stringGeo, stringMat);
+            bowGroup.add(stringLine);
+
+            bowGroup.position.copy(BOW_POS);
+            bowGroup.lookAt(HEART_POS); 
+            scene.add(bowGroup);
+
+            // --- 流星箭 ---
+            arrowGroup = new THREE.Group();
+            const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 7, 16).rotateX(Math.PI/2), new THREE.MeshStandardMaterial({ color: 0x4a2a18 }));
+            shaft.position.z = 3.5; 
+            const tip = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.8, 8).rotateX(Math.PI/2), new THREE.MeshStandardMaterial({ color: 0xc0c0c0, metalness: 0.9 }));
+            tip.position.z = 7; 
+            for(let i=0; i<3; i++) {
+                const feather = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.4, 0.8), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+                feather.position.z = 0.4;
+                feather.rotation.z = (Math.PI*2/3)*i;
+                feather.position.x = Math.sin((Math.PI*2/3)*i)*0.1;
+                feather.position.y = Math.cos((Math.PI*2/3)*i)*0.1;
+                arrowGroup.add(feather);
+            }
+            arrowGroup.add(shaft, tip);
+            const arrowLight = new THREE.PointLight(0x00ffff, 2, 8);
+            arrowLight.position.z = 7; 
+            arrowGroup.add(arrowLight);
+
+            arrowGroup.position.copy(BOW_POS);
+            arrowGroup.lookAt(HEART_POS);
+            scene.add(arrowGroup);
+
+            // --- 专属立体 3D 相框照片 ---
+            const photoWidth = 4.5;
+            const photoHeight = 6.0;
+            const photoDepth = 0.15; 
+            
+            const photoGeo = new THREE.BoxGeometry(photoWidth, photoHeight, photoDepth);
+            
+            const photoTex = new THREE.TextureLoader().load('photo.jpg');
+            photoTex.encoding = THREE.sRGBEncoding; 
+
+            const frameMat = new THREE.MeshStandardMaterial({ 
+                color: 0xf0f0f0, 
+                roughness: 0.3, 
+                metalness: 0.4 
+            });
+            const imageMat = new THREE.MeshStandardMaterial({ 
+                map: photoTex, 
+                roughness: 0.8, 
+                metalness: 0.0 
+            });
+
+            const materials = [
+                frameMat, frameMat, frameMat, frameMat,
+                imageMat, // 正面
+                imageMat  // 背面
+            ];
+
+            photoMesh = new THREE.Mesh(photoGeo, materials);
+            photoMesh.scale.set(0, 0, 0); 
+            photoMesh.position.copy(HEART_POS); 
+            scene.add(photoMesh);
+
+            // --- 飞行的丘比特 (Procedural 3D Angel) ---
+            createCupid();
+        }
+
+        // ==========================================
+        // ★ 全新：更大、更精致的 Q 版丘比特模型
+        // ==========================================
+        function createCupid() {
+            cupidGroup = new THREE.Group();
+
+            // 材质库
+            const skinMat = new THREE.MeshStandardMaterial({ color: 0xffddcc, roughness: 0.3, metalness: 0.1 }); // 真实的皮肤质感
+            const hairMat = new THREE.MeshStandardMaterial({ color: 0xffd700, roughness: 0.7, metalness: 0.2 }); // 金发
+            const clothMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 }); // 哑光白袍
+            const goldMat = new THREE.MeshStandardMaterial({ color: 0xffd700, roughness: 0.1, metalness: 0.9 }); // 纯金物件
+            const wingMat = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
+
+            // 1. 头部与金发卷毛
+            const head = new THREE.Mesh(new THREE.SphereGeometry(0.35, 32, 32), skinMat);
+            head.position.y = 1.0;
+            
+            const hairGroup = new THREE.Group();
+            const hairBase = new THREE.Mesh(new THREE.SphereGeometry(0.37, 16, 16, 0, Math.PI * 2, 0, Math.PI / 2), hairMat);
+            hairGroup.add(hairBase);
+            // 添加可爱的卷发球体
+            for(let i=0; i<8; i++) {
+                const curl = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 16), hairMat);
+                curl.position.set(Math.cos(i) * 0.28, -0.05, Math.sin(i) * 0.28);
+                hairGroup.add(curl);
+            }
+            hairGroup.position.y = 1.02;
+            cupidGroup.add(head, hairGroup);
+
+            // 2. 天使光环
+            const halo = new THREE.Mesh(new THREE.TorusGeometry(0.25, 0.03, 16, 32), goldMat);
+            halo.rotation.x = Math.PI / 2;
+            halo.position.y = 1.55;
+            cupidGroup.add(halo);
+
+            // 3. 身体 (天使长袍)
+            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.35, 0.7, 32), clothMat);
+            body.position.y = 0.45;
+            cupidGroup.add(body);
+
+            // 4. 四肢 (带飞行动作)
+            const limbGeo = new THREE.CylinderGeometry(0.06, 0.05, 0.4, 16);
+            
+            const leftArm = new THREE.Mesh(limbGeo, skinMat);
+            leftArm.position.set(-0.3, 0.6, 0.1);
+            leftArm.rotation.set(Math.PI/3, 0, Math.PI/4); // 向上方伸展
+            
+            const rightArm = new THREE.Mesh(limbGeo, skinMat);
+            rightArm.position.set(0.3, 0.6, 0.2);
+            rightArm.rotation.set(Math.PI/2, 0, -Math.PI/6); // 向前持弓
+            
+            const leftLeg = new THREE.Mesh(limbGeo, skinMat);
+            leftLeg.position.set(-0.15, 0.05, -0.1);
+            leftLeg.rotation.set(-Math.PI/6, 0, 0); // 向后飘逸
+            
+            const rightLeg = new THREE.Mesh(limbGeo, skinMat);
+            rightLeg.position.set(0.15, 0.15, -0.2);
+            rightLeg.rotation.set(-Math.PI/3, 0, 0); // 屈膝
+            
+            cupidGroup.add(leftArm, rightArm, leftLeg, rightLeg);
+
+            // 5. 手里的小金弓与背后的箭袋
+            const tinyBow = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.03, 16, 32, Math.PI), goldMat);
+            tinyBow.position.set(0.3, 0.6, 0.4);
+            tinyBow.rotation.set(Math.PI / 2, 0, Math.PI / 4);
+            cupidGroup.add(tinyBow);
+
+            const quiverGeo = new THREE.CylinderGeometry(0.1, 0.05, 0.5, 16);
+            const quiver = new THREE.Mesh(quiverGeo, goldMat);
+            quiver.position.set(0, 0.5, -0.35);
+            quiver.rotation.set(Math.PI/6, 0, Math.PI/4);
+            cupidGroup.add(quiver);
+
+            // 6. 巨大且优美的羽毛翅膀
+            const wingShape = new THREE.Shape();
+            wingShape.moveTo(0, 0); 
+            wingShape.bezierCurveTo(0.5, 1.2, 1.4, 1.0, 1.8, 0.2); // 顶部优雅弧线
+            wingShape.bezierCurveTo(1.6, 0.0, 1.4, -0.5, 0.9, -0.7); // 中部羽毛
+            wingShape.bezierCurveTo(0.7, -0.9, 0.4, -1.2, 0.1, -0.6); // 底部羽毛收尾
+            wingShape.quadraticCurveTo(0.05, -0.2, 0, 0); 
+            
+            const wingGeo = new THREE.ShapeGeometry(wingShape);
+
+            leftWingPivot = new THREE.Group();
+            leftWingPivot.position.set(-0.15, 0.6, -0.2);
+            const lw = new THREE.Mesh(wingGeo, wingMat);
+            lw.rotation.y = Math.PI; // 左翅膀沿Y轴翻转
+            leftWingPivot.add(lw);
+            
+            rightWingPivot = new THREE.Group();
+            rightWingPivot.position.set(0.15, 0.6, -0.2);
+            const rw = new THREE.Mesh(wingGeo, wingMat);
+            rightWingPivot.add(rw);
+            
+            cupidGroup.add(leftWingPivot, rightWingPivot);
+
+            // 7. 魔法点光源 (让丘比特自身散发神圣光芒)
+            const fairyLight = new THREE.PointLight(0xffe299, 2.0, 8);
+            cupidGroup.add(fairyLight);
+
+            // 初始隐藏
+            cupidGroup.scale.set(0, 0, 0);
+            cupidGroup.position.copy(HEART_POS);
+            scene.add(cupidGroup);
+        }
+
+        function startHeartbeat() {
+            heartbeatTween = gsap.timeline({ repeat: -1 });
+            heartbeatTween.to(heartMesh.scale, { x: 1.06, y: 1.06, z: 1.06, duration: 0.15, ease: "power2.out" })
+                          .to(heartMesh.scale, { x: 0.96, y: 0.96, z: 0.96, duration: 0.15, ease: "power2.inOut" })
+                          .to(heartMesh.scale, { x: 1.03, y: 1.03, z: 1.03, duration: 0.12, ease: "power2.out" })
+                          .to(heartMesh.scale, { x: 1.0, y: 1.0, z: 1.0, duration: 0.4, ease: "power1.inOut" })
+                          .to({}, { duration: 0.5 });
+        }
+
+        function prepareAndShoot() {
+            if (isAnimating) return;
+            const btn = document.getElementById('shootBtn');
+            btn.disabled = true;
+            btn.innerText = "魔法施放中...";
+            
+            gsap.to(btn, { opacity: 0, duration: 0.5, onComplete: () => btn.style.display = 'none' });
+            playCinematicAnimation(); 
+        }
+
+        function playCinematicAnimation() {
+            isAnimating = true;
+            if(heartbeatTween) heartbeatTween.pause();
+
+            heartMesh.scale.set(1, 1, 1);
+            heartMesh.visible = true;
+            bowGroup.scale.set(1, 1, 1);
+            bowGroup.visible = true;
+            arrowGroup.scale.set(1, 1, 1);
+            arrowGroup.visible = true;
+            photoMesh.scale.set(0, 0, 0);
+            photoMesh.rotation.set(0, 0, 0);
+            
+            bowGroup.position.copy(BOW_POS);
+            arrowGroup.position.copy(BOW_POS);
+            
+            let drawState = { pull: 0 }; 
+            const tl = gsap.timeline({ onComplete: () => { isAnimating = false; } });
+
+            // 1. 运镜
+            tl.to(camera.position, { x: -6, y: 3, z: 10, duration: 1.2, ease: "power2.inOut" }, 0);
+            tl.to(controls.target, { x: BOW_POS.x, y: BOW_POS.y, z: BOW_POS.z }, 0); 
+
+            // 2. 蓄力
+            tl.to(drawState, {
+                pull: -3.5, 
+                duration: 1.2,
+                ease: "power2.inOut",
+                onUpdate: () => {
+                    const pos = stringLine.geometry.attributes.position.array;
+                    pos[5] = drawState.pull; 
+                    stringLine.geometry.attributes.position.needsUpdate = true;
+                }
+            }, 0.5);
+            tl.to(arrowGroup.position, { x: DRAW_POS.x, y: DRAW_POS.y, z: DRAW_POS.z, duration: 1.2, ease: "power2.inOut" }, 0.5);
+
+            // 3. 发射
+            tl.to(drawState, {
+                pull: 0,
+                duration: 0.15,
+                ease: "elastic.out(1, 0.3)",
+                onUpdate: () => {
+                    const pos = stringLine.geometry.attributes.position.array;
+                    pos[5] = drawState.pull;
+                    stringLine.geometry.attributes.position.needsUpdate = true;
+                }
+            }, "+=0.2"); 
+            tl.to(arrowGroup.position, { x: HIT_POS.x, y: HIT_POS.y, z: HIT_POS.z, duration: 0.8, ease: "power2.in" }, "<"); 
+            tl.to(controls.target, { x: HEART_POS.x, y: HEART_POS.y, z: HEART_POS.z, duration: 0.8, ease: "power2.in" }, "<");
+
+            // 4. 撞击
+            tl.to(heartMesh.scale, { x: 1.5, y: 1.5, z: 0.3, duration: 0.08, ease: "power2.out" }, "+=0.0");
+            tl.to(heartMesh.scale, { x: 0.8, y: 0.8, z: 1.2, duration: 0.1, yoyo: true, repeat: 3, ease: "sine.inOut" }, "+=0.0");
+
+            // 5. 消散
+            tl.to([heartMesh.scale, arrowGroup.scale, bowGroup.scale], {
+                x: 0, y: 0, z: 0,
+                duration: 0.4,
+                ease: "back.in(2)",
+                onComplete: () => {
+                    heartMesh.visible = false;
+                    arrowGroup.visible = false;
+                    bowGroup.visible = false;
+                }
+            }, "+=0.1");
+
+            // 6. 3D相框破茧弹出与环境切换 
+            tl.to(photoMesh.position, { x: HEART_POS.x, y: HEART_POS.y, z: HEART_POS.z, duration: 1.2, ease: "power2.out" }, "+=0.0");
+            tl.to(photoMesh.scale, { x: 1, y: 1, z: 1, duration: 1.2, ease: "elastic.out(1, 0.45)" }, "<");
+            tl.to(photoMesh.rotation, { y: Math.PI * 4, duration: 1.5, ease: "power3.out" }, "<");
+            
+            // 背景渐显、黑雾驱散、文字变色
+            tl.to("#romantic-bg", { opacity: 1, duration: 1.5, ease: "power2.inOut" }, "<");
+            tl.to(scene.fog, { density: 0, duration: 1.5 }, "<"); 
+            tl.to("#hint", { color: "rgba(180, 100, 120, 0.9)", duration: 1.5 }, "<"); 
+
+            // 摄像机推进
+            tl.to(camera.position, { x: HEART_POS.x, y: HEART_POS.y, z: HEART_POS.z + 10, duration: 1.5, ease: "power2.out" }, "<");
+
+            // 召唤变大、变精致的小丘比特入场
+            // 注意这里放大了 scale 至 1.2，结合其原本就增大的体型，显得非常显眼
+            tl.to(cupidGroup.scale, { x: 1.2, y: 1.2, z: 1.2, duration: 1.2, ease: "elastic.out(1, 0.5)" }, "<");
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // 用于立体悬浮效果的时间变量
+        let time = 0;
+
+        function animateLoop() {
+            requestAnimationFrame(animateLoop);
+            
+            if (!isAnimating && heartMesh && heartMesh.visible) {
+                heartMesh.rotation.y += 0.003;
+            }
+            
+            // 照片弹出完成后的立体微浮动特效
+            if (!isAnimating && photoMesh && photoMesh.scale.x > 0.9) {
+                time += 0.015;
+                photoMesh.position.y = HEART_POS.y + Math.sin(time) * 0.15; 
+                
+                // 丘比特绕场飞行与拍打翅膀特效
+                if (cupidGroup) {
+                    // ★ 翅膀拍打非常优雅缓慢
+                    leftWingPivot.rotation.y = Math.sin(time * 12) * 0.4 - 0.2;
+                    rightWingPivot.rotation.y = -Math.sin(time * 12) * 0.4 + 0.2;
+
+                    // ★ 扩大飞行半径，降低飞行速度
+                    const radiusX = 6.0; // 绕大圈
+                    const radiusZ = 4.5;
+                    const flySpeed = 0.3; // 缓慢优雅地飞行
+                    
+                    cupidGroup.position.x = HEART_POS.x + Math.sin(time * flySpeed) * radiusX;
+                    cupidGroup.position.z = HEART_POS.z + Math.cos(time * flySpeed) * radiusZ;
+                    cupidGroup.position.y = HEART_POS.y + Math.sin(time * flySpeed * 2) * 1.5 + 1; // 上下波浪形飞舞
+
+                    // 让丘比特始终看向飞行的正前方
+                    const nextX = HEART_POS.x + Math.sin((time + 0.05) * flySpeed) * radiusX;
+                    const nextZ = HEART_POS.z + Math.cos((time + 0.05) * flySpeed) * radiusZ;
+                    const nextY = HEART_POS.y + Math.sin((time + 0.05) * flySpeed * 2) * 1.5 + 1;
+                    cupidGroup.lookAt(nextX, nextY, nextZ);
+                }
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
